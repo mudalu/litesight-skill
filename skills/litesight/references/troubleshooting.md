@@ -78,6 +78,6 @@ sed -i 's/\r$//' scripts/litesight.sh
 
 - 官网：<https://www.litesight.cn>
 - 网站内「意见反馈」
-- 邮件：support@litesight.cn
+- 邮件：lite_sight@163.com
 
 反馈时请提供错误信息原文和任务 ID。不要提供完整令牌。
