@@ -20,11 +20,11 @@
 
 **链接无法识别或报价失败**
 
-确认链接能在浏览器里打开，且视频是公开的。私密、已删除或需要登录才能看的视频无法解析。可以把整段分享文案直接传给 `quote`。
+确认链接能在浏览器里打开，且视频是公开的。私密、已删除或需要登录才能看的视频无法解析。可以把整段分享文案作为 `quote` 的参数提交，服务端只提取其中的链接。
 
 **`INSUFFICIENT_CREDITS`**
 
-余额不足。调用 `recharge` 给出充值入口。
+余额不足。询问用户是否需要充值入口，同意后调用 `recharge --yes`。
 
 **`DURATION_LIMIT_EXCEEDED`**
 
@@ -36,7 +36,7 @@
 
 **提交超时，不确定是否成功**
 
-用同一个幂等键再提交一次，不会重复扣费；或用 `list` 查看最新任务。不要换一个新的幂等键重试。
+先用 `list` 查看最新任务是否已经创建。需要重试时用 `--idempotency-key` 传入同一个幂等键，不会重复扣费。不要换一个新的幂等键重试。
 
 ## 任务处理
 
@@ -66,9 +66,9 @@ curl 版本过旧，需要 7.76 或更高版本。
 sed -i 's/\r$//' scripts/litesight.sh
 ```
 
-**提示 `LITESIGHT_API_URL must be an https://*.litesight.cn address`**
+**提示 `requires explicit user confirmation`**
 
-为了保护令牌，脚本只向 `litesight.cn` 域名的 HTTPS 地址发请求。正常使用不需要设置这个变量，取消设置即可。
+`submit` 和 `recharge` 必须带 `--yes`。先向用户说明本次操作并得到明确同意，再加上 `--yes` 重新执行。
 
 **连接超时或无法解析域名**
 

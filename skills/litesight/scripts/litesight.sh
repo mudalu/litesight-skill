@@ -4,51 +4,37 @@
 # 通过 HTTPS 调用 LiteSight 开放接口，使用个人访问令牌（PAT）鉴权。
 # 依赖：bash、curl。
 #
+# 安全约定：
+#   - 接口地址固定为 LiteSight 官方域名，不能通过环境变量或参数修改。
+#   - 令牌通过标准输入交给 curl，不出现在命令行参数里。
+#   - 会扣积分或生成支付入口的命令（submit、recharge）必须带 --yes，
+#     表示用户已经明确确认；不带时脚本不会发出任何请求。
+#
 
 set -euo pipefail
 
-LITESIGHT_API_URL="${LITESIGHT_API_URL:-https://www.litesight.cn/api/admin/skillhub}"
-LITESIGHT_TOKEN_FILE="${HOME}/.config/litesight/token"
+readonly LITESIGHT_API_BASE="https://www.litesight.cn/api/admin/skillhub"
+readonly LITESIGHT_TOKEN_FILE="${HOME}/.config/litesight/token"
 
 die() {
     echo "Error: $*" >&2
     exit 1
 }
 
-# 令牌只允许发往 LiteSight 官方域名（HTTPS）；本机调试地址除外
-check_api_url() {
-    local url=$LITESIGHT_API_URL scheme rest host
-    case "$url" in
-        https://*) scheme=https; rest=${url#https://} ;;
-        http://*)  scheme=http;  rest=${url#http://} ;;
-        *) die "LITESIGHT_API_URL is not allowed: $url" ;;
-    esac
-
-    host=${rest%%[/?#]*}
-    # 拒绝 user@host 形式，避免伪装成官方域名
-    case "$host" in
-        *@*) die "LITESIGHT_API_URL is not allowed: $url" ;;
-    esac
-    host=${host%%:*}
-
-    case "$scheme:$host" in
-        https:litesight.cn|https:*.litesight.cn) ;;
-        http:localhost|http:127.0.0.1) ;;
-        *) die "LITESIGHT_API_URL must be an https://*.litesight.cn address (got: $url)" ;;
-    esac
-}
-
-# 从环境变量或配置文件读取 Token
+# 从环境变量或配置文件读取 Token，并校验字符集
 get_token() {
+    local token
     if [[ -n "${LITESIGHT_TOKEN:-}" ]]; then
-        printf '%s' "$LITESIGHT_TOKEN"
+        token=$LITESIGHT_TOKEN
     elif [[ -f "$LITESIGHT_TOKEN_FILE" ]]; then
-        tr -d '\r\n' < "$LITESIGHT_TOKEN_FILE"
+        token=$(tr -d '\r\n' < "$LITESIGHT_TOKEN_FILE")
     else
         echo "Error: LITESIGHT_TOKEN not set and $LITESIGHT_TOKEN_FILE not found" >&2
         echo "Please set LITESIGHT_TOKEN environment variable or save token to $LITESIGHT_TOKEN_FILE" >&2
         exit 1
     fi
+    [[ "$token" =~ ^[A-Za-z0-9_-]+$ ]] || die "token contains invalid characters"
+    printf '%s' "$token"
 }
 
 # 把任意文本转成 JSON 字符串内容（不含外层引号）
@@ -72,22 +58,31 @@ require_bool() {
     [[ "$1" == "true" || "$1" == "false" ]] || die "$2 must be true or false"
 }
 
+# 高代价操作的强制确认：没有 --yes 就中止，不发请求
+require_confirmation() {
+    local confirmed=$1 what=$2
+    if [[ "$confirmed" != "true" ]]; then
+        echo "Error: $what requires explicit user confirmation." >&2
+        echo "Ask the user first. Only after the user clearly agrees, run the command again with --yes." >&2
+        exit 2
+    fi
+}
+
 # HTTP 请求包装
 api_call() {
     local method=$1
     local path=$2
     local data=${3:-}
 
-    check_api_url
-
     local token
     token=$(get_token)
 
     local curl_opts=(
+        --config -
         -X "$method"
-        -H "Authorization: Bearer $token"
         -H "Content-Type: application/json"
         -H "Accept: application/json"
+        --proto "=https"
         --silent
         --show-error
         --fail-with-body
@@ -98,7 +93,9 @@ api_call() {
         curl_opts+=(-d "$data")
     fi
 
-    curl "${curl_opts[@]}" "${LITESIGHT_API_URL}${path}"
+    # 令牌经标准输入传入（printf 是 shell 内建命令），不会出现在进程参数里
+    printf 'header = "Authorization: Bearer %s"\n' "$token" \
+        | curl "${curl_opts[@]}" "${LITESIGHT_API_BASE}${path}"
 }
 
 # 命令：配置 Token
@@ -110,6 +107,7 @@ cmd_configure() {
     token=$(printf '%s' "$token" | tr -d '\r\n ')
 
     [[ -n "$token" ]] || die "empty token"
+    [[ "$token" =~ ^[A-Za-z0-9_-]+$ ]] || die "token contains invalid characters"
 
     if [[ ! "$token" =~ ^ls_sk_ ]]; then
         echo "Warning: Token does not start with 'ls_sk_'. Please verify it is a valid LiteSight PAT." >&2
@@ -144,7 +142,7 @@ cmd_list() {
     api_call GET "/tasks$query"
 }
 
-# 命令：报价（可直接传入整段分享文案，服务端会提取其中的链接）
+# 命令：报价（不扣费；可传入整段分享文案，服务端只提取其中的链接）
 cmd_quote() {
     local url=${1:-}
 
@@ -156,19 +154,36 @@ cmd_quote() {
     api_call POST "/quotes" "{\"url\":\"$(json_escape "$url")\"}"
 }
 
-# 命令：提交任务
+# 命令：提交任务（扣积分，必须带 --yes）
 cmd_submit() {
-    local quote_id=${1:-}
-    local idempotency_key=${2:-"$(date +%s)-${RANDOM}${RANDOM}"}
-    local force=${3:-false}
+    local usage="Usage: litesight submit <quote_id> --yes [--idempotency-key <key>] [--force]"
+    local quote_id="" idempotency_key="" force=false confirmed=false
 
-    if [[ -z "$quote_id" ]]; then
-        echo "Usage: litesight submit <quote_id> [idempotency_key] [force]" >&2
-        exit 1
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --yes) confirmed=true; shift ;;
+            --force) force=true; shift ;;
+            --idempotency-key)
+                [[ $# -ge 2 ]] || die "option $1 needs a value"
+                idempotency_key=$2; shift 2 ;;
+            --*) die "Unknown option: $1. $usage" ;;
+            *)
+                [[ -z "$quote_id" ]] || die "unexpected argument: $1. $usage"
+                quote_id=$1; shift ;;
+        esac
+    done
+
+    [[ -n "$quote_id" ]] || die "$usage"
+    [[ "$quote_id" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid quote_id"
+    if [[ -n "$idempotency_key" ]]; then
+        [[ "$idempotency_key" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid idempotency key"
     fi
-    require_bool "$force" "force"
 
-    api_call POST "/tasks" "{\"quoteId\":\"$(json_escape "$quote_id")\",\"idempotencyKey\":\"$(json_escape "$idempotency_key")\",\"force\":$force}"
+    require_confirmation "$confirmed" "submit (it spends the user's credits)"
+
+    [[ -n "$idempotency_key" ]] || idempotency_key="$(date +%s)-${RANDOM}${RANDOM}"
+
+    api_call POST "/tasks" "{\"quoteId\":\"$quote_id\",\"idempotencyKey\":\"$idempotency_key\",\"force\":$force}"
 }
 
 # 命令：任务状态
@@ -218,8 +233,18 @@ cmd_media() {
     api_call GET "/tasks/$1/media?refresh=$refresh"
 }
 
-# 命令：充值链接
+# 命令：充值链接（生成支付入口，必须带 --yes）
 cmd_recharge() {
+    local confirmed=false
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --yes) confirmed=true; shift ;;
+            *) die "Unknown option: $1. Usage: litesight recharge --yes" ;;
+        esac
+    done
+
+    require_confirmation "$confirmed" "recharge (it creates a payment link)"
+
     api_call POST "/recharge-link"
 }
 
@@ -231,12 +256,16 @@ Usage:
   litesight configure              Configure Personal Access Token
   litesight account                Get account status and credits
   litesight list [status] [page] [size]  List analysis tasks
-  litesight quote <url-or-share-text>    Quote analysis for a video link
-  litesight submit <quote_id> [idempotency_key] [force]  Submit analysis task
+  litesight quote <url-or-share-text>    Quote analysis for a video link (free)
+  litesight submit <quote_id> --yes [--idempotency-key <key>] [--force]
+                                   Submit analysis task (spends credits)
   litesight status <task_id>       Get task status
   litesight result <task_id> [--sections <s>] [--cursor <c>] [--limit <n>]  Get task result
   litesight media <task_id> [refresh]  Get media links
-  litesight recharge               Create recharge link
+  litesight recharge --yes         Create recharge link
+
+  --yes means the user has explicitly confirmed. Without it, submit and
+  recharge stop without sending any request.
 
 Environment:
   LITESIGHT_TOKEN        Personal Access Token (or use configure command)
