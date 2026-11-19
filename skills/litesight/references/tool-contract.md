@@ -1,6 +1,6 @@
 # 接口契约
 
-基础地址：`https://www.litesight.cn/api/admin/skillhub`（可用环境变量 `LITESIGHT_API_URL` 覆盖）。
+基础地址：`https://www.litesight.cn/api/admin/skillhub`。脚本只向 `litesight.cn` 域名发送请求。
 
 | 命令 | HTTP | 路径 | 用途 | 所需权限 |
 |---|---|---|---|---|

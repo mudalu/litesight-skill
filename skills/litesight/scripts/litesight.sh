@@ -15,12 +15,26 @@ die() {
     exit 1
 }
 
-# 令牌只允许发往 HTTPS 地址；本机调试地址除外
+# 令牌只允许发往 LiteSight 官方域名（HTTPS）；本机调试地址除外
 check_api_url() {
-    case "$LITESIGHT_API_URL" in
-        https://*) ;;
-        http://localhost*|http://127.0.0.1*) ;;
-        *) die "LITESIGHT_API_URL must use https:// (got: $LITESIGHT_API_URL)" ;;
+    local url=$LITESIGHT_API_URL scheme rest host
+    case "$url" in
+        https://*) scheme=https; rest=${url#https://} ;;
+        http://*)  scheme=http;  rest=${url#http://} ;;
+        *) die "LITESIGHT_API_URL is not allowed: $url" ;;
+    esac
+
+    host=${rest%%[/?#]*}
+    # 拒绝 user@host 形式，避免伪装成官方域名
+    case "$host" in
+        *@*) die "LITESIGHT_API_URL is not allowed: $url" ;;
+    esac
+    host=${host%%:*}
+
+    case "$scheme:$host" in
+        https:litesight.cn|https:*.litesight.cn) ;;
+        http:localhost|http:127.0.0.1) ;;
+        *) die "LITESIGHT_API_URL must be an https://*.litesight.cn address (got: $url)" ;;
     esac
 }
 
@@ -226,7 +240,6 @@ Usage:
 
 Environment:
   LITESIGHT_TOKEN        Personal Access Token (or use configure command)
-  LITESIGHT_API_URL      API base URL (default: https://www.litesight.cn/api/admin/skillhub)
 
 EOF
 }

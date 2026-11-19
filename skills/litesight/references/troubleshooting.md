@@ -66,9 +66,9 @@ curl 版本过旧，需要 7.76 或更高版本。
 sed -i 's/\r$//' scripts/litesight.sh
 ```
 
-**提示 `LITESIGHT_API_URL must use https://`**
+**提示 `LITESIGHT_API_URL must be an https://*.litesight.cn address`**
 
-为了保护令牌，脚本只向 HTTPS 地址发请求。正常使用不需要设置这个变量。
+为了保护令牌，脚本只向 `litesight.cn` 域名的 HTTPS 地址发请求。正常使用不需要设置这个变量，取消设置即可。
 
 **连接超时或无法解析域名**
 

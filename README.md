@@ -57,7 +57,7 @@ bash skills/litesight/scripts/litesight.sh account
 ## 安全说明
 
 - 令牌只保存在本机的环境变量或 `~/.config/litesight/token`（权限 600）。
-- 脚本只向 `https://www.litesight.cn` 发送请求；自定义地址必须是 HTTPS。
+- 脚本只向 LiteSight 官方域名（`https://www.litesight.cn`）发送请求，不接受其他域名的接口地址。
 - 令牌可以在 LiteSight 账号设置里随时撤销。
 
 ## 目录结构
