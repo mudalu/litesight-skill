@@ -63,7 +63,7 @@
 {
   "items": [
     {
-      "task_id": "2101588428760346625",
+      "task_id": "1234567890123456789",
       "title": "视频标题",
       "source": "douyin",
       "status": "COMPLETED",
@@ -124,7 +124,7 @@
 
 ```json
 {
-  "task_id": 2101588428760346625,
+  "task_id": 1234567890123456789,
   "idempotency_key": "…",
   "status": "PENDING"
 }
@@ -139,7 +139,7 @@
 
 ```json
 {
-  "task_id": "2101588428760346625",
+  "task_id": "1234567890123456789",
   "status": "PROCESSING_LLM",
   "stage": "PROCESSING_LLM",
   "progress_hint": "…",
@@ -161,7 +161,7 @@
 
 ```json
 {
-  "task_id": "2101588428760346625",
+  "task_id": "1234567890123456789",
   "status": "COMPLETED",
   "sections": ["metadata", "summary", "mind_map"],
   "metadata": { "task_id": "…", "title": "…", "source": "douyin", "media_duration": 399 },
@@ -188,7 +188,7 @@
 
 ```json
 {
-  "task_id": "2101588428760346625",
+  "task_id": "1234567890123456789",
   "media_url": "…",
   "audio_url": "…",
   "expires_at": "…",

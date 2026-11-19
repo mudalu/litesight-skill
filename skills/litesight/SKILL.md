@@ -1,7 +1,7 @@
 ---
 name: litesight
 description: 用 LiteSight（轻析）把抖音、B站、快手、小红书、微博等视频链接解析成文字稿、摘要、思维导图和知识笔记。当用户发来视频链接或分享文案，想要提取文案、总结内容、生成脑图或笔记，或想查询之前的解析任务时使用。需要用户先配置 LiteSight 个人访问令牌。
-version: 0.2.4
+version: 0.2.5
 license: MIT
 homepage: https://www.litesight.cn
 metadata:
