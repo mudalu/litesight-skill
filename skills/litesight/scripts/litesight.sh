@@ -7,14 +7,20 @@
 # 安全约定：
 #   - 接口地址固定为 LiteSight 官方域名，不能通过环境变量或参数修改。
 #   - 令牌通过标准输入交给 curl，不出现在命令行参数里。
-#   - 会扣积分或生成支付入口的命令（submit、recharge）必须带 --yes，
-#     表示用户已经明确确认；不带时脚本不会发出任何请求。
+#   - 分享文案等不可信文本通过文件或标准输入传入，不放在命令行参数里。
+#   - 扣积分（submit）和生成支付入口（recharge）必须经过确认，见下方
+#     “确认机制”一节；submit 只接受本机刚报过价、尚未过期的 quote_id，
+#     并在确认前回显本次费用。
+#   - 不提供强制重新解析的开关：已解析过的链接不会被重复扣费。
 #
 
 set -euo pipefail
 
 readonly LITESIGHT_API_BASE="https://www.litesight.cn/api/admin/skillhub"
 readonly LITESIGHT_TOKEN_FILE="${HOME}/.config/litesight/token"
+readonly LITESIGHT_QUOTE_DIR="${HOME}/.cache/litesight/quotes"
+readonly LITESIGHT_QUOTE_TTL=600
+readonly LITESIGHT_MAX_INPUT=4000
 
 die() {
     echo "Error: $*" >&2
@@ -50,6 +56,12 @@ json_escape() {
     printf '%s' "$s"
 }
 
+# 从响应 JSON 里取一个数字字段；取不到时输出空
+json_number() {
+    local re="\"$2\"[[:space:]]*:[[:space:]]*([0-9]+)"
+    [[ "$1" =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}" || true
+}
+
 require_task_id() {
     [[ "${1:-}" =~ ^[0-9]+$ ]] || die "task_id must be a number. $2"
 }
@@ -58,15 +70,58 @@ require_bool() {
     [[ "$1" == "true" || "$1" == "false" ]] || die "$2 must be true or false"
 }
 
-# 高代价操作的强制确认：没有 --yes 就中止，不发请求
-require_confirmation() {
+require_quote_id() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9-]{8,64}$ ]] || die "invalid quote_id"
+}
+
+# ---------------------------------------------------------------------------
+# 本机报价记录：quote 成功后记下费用，submit 时据此回显并校验
+# ---------------------------------------------------------------------------
+
+save_quote() {
+    local body=$1 re='"quote_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9-]{8,64})"'
+    [[ "$body" =~ $re ]] || return 0
+    local quote_id=${BASH_REMATCH[1]}
+    local credits balance duration
+    credits=$(json_number "$body" required_credits)
+    balance=$(json_number "$body" balance)
+    duration=$(json_number "$body" duration_seconds)
+    [[ -n "$credits" ]] || return 0
+
+    mkdir -p "$LITESIGHT_QUOTE_DIR"
+    (umask 077 && printf '%s %s %s %s\n' "$credits" "${balance:-0}" "${duration:-0}" "$(date +%s)" \
+        > "$LITESIGHT_QUOTE_DIR/$quote_id")
+}
+
+# 读取报价记录，结果放进 QUOTE_CREDITS / QUOTE_BALANCE / QUOTE_DURATION
+load_quote() {
+    local file="$LITESIGHT_QUOTE_DIR/$1" saved_at now
+    [[ -f "$file" ]] || die "no local record of this quote. Run 'quote' first and show the cost to the user."
+    read -r QUOTE_CREDITS QUOTE_BALANCE QUOTE_DURATION saved_at < "$file"
+    [[ "$QUOTE_CREDITS" =~ ^[0-9]+$ && "$saved_at" =~ ^[0-9]+$ ]] || die "quote record is corrupted. Run 'quote' again."
+    now=$(date +%s)
+    if (( now - saved_at > LITESIGHT_QUOTE_TTL )); then
+        rm -f "$file"
+        die "this quote has expired. Run 'quote' again and show the new cost to the user."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 确认机制
+# ---------------------------------------------------------------------------
+# >>> confirmation
+# 调用方必须带 --yes，表示用户已经在对话里明确同意本次操作。
+# 不带时中止，不发出任何请求。
+confirm_action() {
     local confirmed=$1 what=$2
+    echo "$what" >&2
     if [[ "$confirmed" != "true" ]]; then
-        echo "Error: $what requires explicit user confirmation." >&2
-        echo "Ask the user first. Only after the user clearly agrees, run the command again with --yes." >&2
+        echo "Error: this action requires explicit user confirmation." >&2
+        echo "Show the cost above to the user and ask. Only after the user clearly agrees, run the command again with --yes." >&2
         exit 2
     fi
 }
+# <<< confirmation
 
 # HTTP 请求包装
 api_call() {
@@ -142,27 +197,49 @@ cmd_list() {
     api_call GET "/tasks$query"
 }
 
-# 命令：报价（不扣费；可传入整段分享文案，服务端只提取其中的链接）
+# 命令：报价（不扣费）
+#   quote --file <path>   从文件读取链接或整段分享文案（推荐）
+#   quote -               从标准输入读取
+#   quote <url>           只接受不含空格和引号的纯链接
 cmd_quote() {
-    local url=${1:-}
+    local usage="Usage: litesight quote --file <path> | quote - | quote <plain-url>"
+    local text url_re='^https?://[A-Za-z0-9._~:/?#@!&=%+,;-]+$'
 
-    if [[ -z "$url" ]]; then
-        echo "Usage: litesight quote <url-or-share-text>" >&2
-        exit 1
-    fi
+    case "${1:-}" in
+        "") die "$usage" ;;
+        -)
+            [[ $# -eq 1 ]] || die "$usage"
+            text=$(head -c "$LITESIGHT_MAX_INPUT")
+            ;;
+        --file)
+            [[ $# -eq 2 ]] || die "$usage"
+            [[ -f "$2" ]] || die "file not found: $2"
+            text=$(head -c "$LITESIGHT_MAX_INPUT" -- "$2")
+            ;;
+        *)
+            [[ $# -eq 1 && "$1" =~ $url_re ]] \
+                || die "only a plain URL may be passed as an argument. Put share text in a file and use: quote --file <path>"
+            text=$1
+            ;;
+    esac
 
-    api_call POST "/quotes" "{\"url\":\"$(json_escape "$url")\"}"
+    [[ -n "$text" ]] || die "empty input"
+
+    local resp rc=0
+    resp=$(api_call POST "/quotes" "{\"url\":\"$(json_escape "$text")\"}") || rc=$?
+    printf '%s\n' "$resp"
+    [[ $rc -eq 0 ]] || exit "$rc"
+    save_quote "$resp"
 }
 
-# 命令：提交任务（扣积分，必须带 --yes）
+# 命令：提交任务（扣积分，需要确认）
 cmd_submit() {
-    local usage="Usage: litesight submit <quote_id> --yes [--idempotency-key <key>] [--force]"
-    local quote_id="" idempotency_key="" force=false confirmed=false
+    local usage="Usage: litesight submit <quote_id> --yes [--idempotency-key <key>]"
+    local quote_id="" idempotency_key="" confirmed=false
 
     while [[ $# -gt 0 ]]; do
         case $1 in
             --yes) confirmed=true; shift ;;
-            --force) force=true; shift ;;
             --idempotency-key)
                 [[ $# -ge 2 ]] || die "option $1 needs a value"
                 idempotency_key=$2; shift 2 ;;
@@ -174,16 +251,22 @@ cmd_submit() {
     done
 
     [[ -n "$quote_id" ]] || die "$usage"
-    [[ "$quote_id" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid quote_id"
+    require_quote_id "$quote_id"
     if [[ -n "$idempotency_key" ]]; then
-        [[ "$idempotency_key" =~ ^[A-Za-z0-9_.:-]+$ ]] || die "invalid idempotency key"
+        [[ "$idempotency_key" =~ ^[A-Za-z0-9_.:-]{1,128}$ ]] || die "invalid idempotency key"
     fi
 
-    require_confirmation "$confirmed" "submit (it spends the user's credits)"
+    load_quote "$quote_id"
+    confirm_action "$confirmed" \
+        "Submit quote $quote_id: spends $QUOTE_CREDITS credit(s); balance $QUOTE_BALANCE; video length ${QUOTE_DURATION}s."
 
     [[ -n "$idempotency_key" ]] || idempotency_key="$(date +%s)-${RANDOM}${RANDOM}"
 
-    api_call POST "/tasks" "{\"quoteId\":\"$quote_id\",\"idempotencyKey\":\"$idempotency_key\",\"force\":$force}"
+    # force 固定为 false：已解析过的链接由服务端去重，不会重复扣费
+    api_call POST "/tasks" "{\"quoteId\":\"$quote_id\",\"idempotencyKey\":\"$idempotency_key\",\"force\":false}"
+
+    # 报价一次有效：提交成功后删除本机记录
+    rm -f "$LITESIGHT_QUOTE_DIR/$quote_id"
 }
 
 # 命令：任务状态
@@ -233,7 +316,7 @@ cmd_media() {
     api_call GET "/tasks/$1/media?refresh=$refresh"
 }
 
-# 命令：充值链接（生成支付入口，必须带 --yes）
+# 命令：充值链接（生成支付入口，需要确认）
 cmd_recharge() {
     local confirmed=false
     while [[ $# -gt 0 ]]; do
@@ -243,7 +326,7 @@ cmd_recharge() {
         esac
     done
 
-    require_confirmation "$confirmed" "recharge (it creates a payment link)"
+    confirm_action "$confirmed" "Create a LiteSight recharge link (opens a payment page; nothing is charged by this command)."
 
     api_call POST "/recharge-link"
 }
@@ -256,8 +339,10 @@ Usage:
   litesight configure              Configure Personal Access Token
   litesight account                Get account status and credits
   litesight list [status] [page] [size]  List analysis tasks
-  litesight quote <url-or-share-text>    Quote analysis for a video link (free)
-  litesight submit <quote_id> --yes [--idempotency-key <key>] [--force]
+  litesight quote --file <path>    Quote a video link or share text read from a file (free)
+  litesight quote -                Same, read from standard input
+  litesight quote <plain-url>      Same, for a URL without spaces or quotes
+  litesight submit <quote_id> --yes [--idempotency-key <key>]
                                    Submit analysis task (spends credits)
   litesight status <task_id>       Get task status
   litesight result <task_id> [--sections <s>] [--cursor <c>] [--limit <n>]  Get task result

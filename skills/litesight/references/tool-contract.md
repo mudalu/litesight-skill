@@ -7,11 +7,11 @@
 | `account` | GET | `/account` | 余额与时长权益 | `litesight.account.read` |
 | `list` | GET | `/tasks` | 历史任务列表 | `litesight.analysis.read` |
 | `quote` | POST | `/quotes` | 报价，不扣费 | `litesight.billing.quote` |
-| `submit` | POST | `/tasks` | 提交并扣积分，必须带 `--yes` | `litesight.analysis.create` |
+| `submit` | POST | `/tasks` | 提交并扣积分，需要用户确认 | `litesight.analysis.create` |
 | `status` | GET | `/tasks/{task_id}/status` | 任务进度 | `litesight.analysis.read` |
 | `result` | GET | `/tasks/{task_id}` | 按分区取结果 | `litesight.analysis.read` |
 | `media` | GET | `/tasks/{task_id}/media` | 短期媒体链接 | `litesight.media.read` |
-| `recharge` | POST | `/recharge-link` | 充值入口，必须带 `--yes` | `litesight.recharge.link` |
+| `recharge` | POST | `/recharge-link` | 充值入口，需要用户确认 | `litesight.recharge.link` |
 
 ## 鉴权
 
@@ -85,7 +85,9 @@
 
 ## quote
 
-请求体：`{"url": "<链接或整段分享文案>"}`
+命令：`quote --file <路径>`（推荐）、`quote -`（标准输入）或 `quote <纯链接>`。链接和分享文案是不可信文本，不要拼进命令行，写入文件后用 `--file` 传入。报价成功后脚本会在本机记下这次的费用，供 `submit` 核对。
+
+脚本发出的请求体：`{"url": "<链接或整段分享文案>"}`
 
 ```json
 {
@@ -110,7 +112,9 @@
 
 ## submit
 
-命令：`submit <quote_id> --yes [--idempotency-key <key>] [--force]`。`--yes` 表示用户已明确确认本次扣费；不带时脚本中止并返回退出码 2，不发请求。`--force` 用于重新解析已有结果的链接。
+命令：`submit <quote_id>`，确认方式见 `SKILL.md`。脚本会先核对本机的报价记录（必须是 10 分钟内由 `quote` 得到的 `quote_id`），回显本次要扣的积分和当前余额，未经确认时中止并返回退出码 2，不发请求。提交成功后该报价记录即作废。
+
+脚本不提供强制重新解析：请求体里的 `force` 固定为 `false`。
 
 脚本发出的请求体：
 
@@ -136,7 +140,7 @@
 
 `status` 的特殊取值：
 
-- `ALREADY_PARSED`：该链接已解析过，没有扣费，`task_id` 指向已有任务。要重新解析需用户确认后加 `--force` 再次提交。
+- `ALREADY_PARSED`：该链接已解析过，没有扣费，`task_id` 指向已有任务，直接用 `result` 查看。
 - `REPLAYED`：同一个幂等键的重复请求，返回的是第一次提交的结果，没有重复扣费。
 
 ## status
@@ -205,7 +209,7 @@
 
 ## recharge
 
-命令：`recharge --yes`。先问用户是否需要充值入口，用户同意后才执行；不带 `--yes` 时脚本中止，不发请求。
+命令：`recharge`，确认方式见 `SKILL.md`。先问用户是否需要充值入口，用户同意后才执行；未经确认时脚本中止，不发请求。
 
 ```json
 {
@@ -227,7 +231,7 @@
 | `SCOPE_INSUFFICIENT` | 令牌缺少所需权限 | 重新生成包含该权限的令牌 |
 | `INSUFFICIENT_CREDITS` | 积分不足 | 询问用户是否需要充值入口 |
 | `DURATION_LIMIT_EXCEEDED` | 超出单次时长上限 | 说明上限，询问是否需要充值入口 |
-| `TASK_ALREADY_PARSED` | 链接已有解析结果 | 查看已有结果，或用户确认后 `--force` |
+| `TASK_ALREADY_PARSED` | 链接已有解析结果 | 用 `result` 查看已有结果 |
 | `QUOTE_EXPIRED` | 报价过期 | 重新 `quote` |
 | `IDEMPOTENCY_CONFLICT` / `REQUEST_IN_PROGRESS` | 同一幂等键的请求冲突或仍在处理 | 不要重复提交，改查 `status` |
 | `TASK_NOT_FOUND` / `TASK_ACCESS_DENIED` | 任务不存在或不属于当前用户 | 用 `list` 确认任务 ID |
