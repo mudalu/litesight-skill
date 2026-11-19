@@ -1,4 +1,4 @@
-# LiteSight Agent Skill
+# 轻析 LiteSight Agent Skill
 
 让 AI 助手把抖音、B站、快手、小红书、微博等视频链接解析成文字稿、摘要、思维导图和知识笔记。
 
