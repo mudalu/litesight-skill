@@ -72,6 +72,6 @@ skills/litesight/
 ## 支持
 
 - 官网：<https://www.litesight.cn>
-- 邮件：support@litesight.cn
+- 邮件：lite_sight@163.com
 
 © LiteSight Team
