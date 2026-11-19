@@ -65,6 +65,7 @@ bash skills/litesight/scripts/litesight.sh account
 ```
 skills/litesight/
 ├── SKILL.md              # 技能说明
+├── LICENSE               # MIT
 ├── scripts/litesight.sh  # 命令行客户端
 └── references/           # 接口契约、结果分区、计费、常见问题
 ```
@@ -74,4 +75,8 @@ skills/litesight/
 - 官网：<https://www.litesight.cn>
 - 邮件：lite_sight@163.com
 
-© LiteSight Team
+## 许可证
+
+本技能包（`SKILL.md`、客户端脚本和文档）以 [MIT](LICENSE) 协议开源。LiteSight 解析服务本身是在线服务，按账户积分计费，不在本协议范围内。
+
+© 2026 LiteSight Team
